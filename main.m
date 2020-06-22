@@ -1,20 +1,27 @@
 %% Main simulation script
 
+%% In progress
+% - testing uav dynamics algorithm
+% - testing path planning algorithm
+% Add earthquake data to model - https://www.gislounge.com/haiti-maps-and-gis-data-resources/
+
 %% To do
-% Include txt file in data and figure exports which describes simulation
-% Fix fuzzy rules not firing
+% Add path plot for scan map
+% Should FIS output surface become flat after a point? It should not be linear
+% since time is so restricted. Unless time is modified beforehand
+% Testing of uavModel and pathPlanner
 % Tune parameters:
+% - tune / optimise slope of FIS output surface
+% - tune environment size? - may be too large currently
 % - fire spread - too fast currently.
 % - number of actions to plan ahead for each agent
 % - scale of fuzzy inputs
 % - risk model weights
 % - wind and fire spread model weights
 % - membership function parameters 
-% Implement multiple simulation functionality.
-% Add earthquake data to model - https://www.gislounge.com/haiti-maps-and-gis-data-resources/
 % Add selection criteria for which cells to consider in path-planning algorithm
 % for each UAV - n closest cells instead of entire map.
-% Get simulation working for UAV's without MPC part
+ % Get simulation working for UAV's without MPC part
 % Implement error checking / code termination condition script.
 % Initial optimisation of output MF parameters
 % - How to go about designing this optimisation?
@@ -31,6 +38,8 @@
 % assumptions list. Add readme.
 % Functions to make sure data arrays don't grow too large?
 % Implement wind speed noise model.
+% Find way to create raster with correct size cells - or just ignore actual size
+% and assume it is close enough
 
 %% Assumptions
 % - Minimise risk to victims until the point at which they are rescued.
@@ -41,9 +50,11 @@
 % - Wind is assumed to be in fixed direction and velocity
 
 %% Bugs
-% UAVs seem to scan one cell and then do nothing
+% Problem with path-planning algorithm
+% Fuzzy rules not firing
 
 %% Change log
+% Changed FIS output surface to decrease with time
 % Moved code from main to separate functions
 % Implemented new tab spacing across entire script
 % Added fire component to victim risk calculation
@@ -77,7 +88,7 @@ clear all;
 
 %% Preprocessing
 
-% Setup paths
+% Set up paths
 addpath('functions', 'inputData', 'outputData', 'figures')
 
 % Import building raster
@@ -87,7 +98,7 @@ m_p_in              = m_p_in(size(m_p_in,1)/4:size(m_p_in,1)/2, size(m_p_in,2)/4
 
 % Time steps and counters
 t       = 0;        % Current time (s)
-t_f     = 600;      % Simulation end time (s) - optional end condition
+t_f     = 1200;     % Simulation end time (s) - optional end condition
 k       = 1;        % Discrete time step counter
 dt_s    = 6;        % Minimum step size (s)
 dt_a    = 6;        % Agent step size (s)
@@ -95,7 +106,7 @@ dt_c    = 600;      % Control step size (s)
 dt_f    = 60;       % Fire step size (s)
 dt_mpc  = 6000;     % MPC step size (s)
 dt_p    = 60;       % Prediction step size (s)
-dt_v    = 60;       % Save variable step size (s)
+dt_v    = 120;      % Save variable step size (s)
 ct_a    = 0;        % Agent counter
 ct_c    = 0;        % Control counter
 ct_f    = 0;        % Fire counter
@@ -115,18 +126,15 @@ finishFlag    = false;
 % Objective function
 obj           = 0;
 s_obj         = 0;
-s_obj_hist    = s_obj; % History of s_obj
+s_obj_hist    = s_obj;
 
 % Quadcopter model
-% Notes:
-% UAV_loc_hist handled completely wrong - fix!
 n_UAV         = 2;                % Number of UAVs in simulation
 l_queue       = 2;                % Queue length for UAV tasks
 v_as_UAV      = 10;               % UAV airspeed (m/s)
 t_travel_UAV  = zeros(n_UAV, 1);  % Time left to complete travel
 t_scan_m      = 1;                % Scan time per square metre
-t_scan_UAV    = nan(n_UAV, 1);   % Time left to complete current scanning task
-UAV_occ       = false(n_UAV, 1);          % Flag for if UAV is occupied
+t_scan_UAV    = nan(n_UAV, 1);    % Time left to complete current scanning task
 UAV_path      = ones(n_UAV, 2);           % Path of UAVs
 UAV_task      = ones(n_UAV, 1);           % Current task for UAVs
 UAV_target    = nan(n_UAV, 2, l_queue);   % Current target queue for UAVs - can queue up to 2 targets
@@ -142,8 +150,6 @@ r_bo        = 0.5;         % Risk weighting due to building occupancy
 r_f         = 0.5;         % Risk weighting due to environmental fire
 
 % Wind variables
-% Notes
-% - tune wind model to point where system can adapt behaviour accordingly
 v_w         = 4;        % Wind speed (m/s)
 ang_w       = pi/2;     % Wind direction (rad) - [-pi/2 pi/2] - w_d = 0 in +ve y axis
 c_w1        = 0.2;      % Wind constant 1 (for fire model)
@@ -165,8 +171,15 @@ m_f_hist    = zeros(n_x_f, n_y_f);      % Fire map history
 % d_max_scan  = sqrt(n_x_f.^2 + n_y_f.^2);% Diagonal distance of scan map (cells)
 
 % Search maps
-l_c_search        = 4*l_c_state;
-[m_search, ~, l_c_s_x, l_c_s_y] = coarsen(m_p_in, m_p_ref, l_c_search);
+% Removing this method for now
+% l_c_search        = 4*l_c_state;
+% c_f_search        = l_c_search/l_c_state;
+% [m_search, ~, l_c_s_x, l_c_s_y] = coarsen(m_p_in, m_p_ref, l_c_search);
+
+c_f_search        = 4; % Search map coarsen factor from environment map
+m_search          = zeros(floor(n_x_f/c_f_search), floor(n_x_f/c_f_search));
+l_c_s_x           = c_f_search*l_c_f_x;                   %
+l_c_s_y           = c_f_search*l_c_f_y;                   %
 t_scan_s          = t_scan_m*l_c_s_x*l_c_s_y;             % Scan time per search map cell
 n_x_search        = size(m_search, 1);                    % Scan map size in x direction
 n_y_search        = size(m_search, 2);                    % Scan map size in y direction
@@ -207,9 +220,6 @@ while n_f_i > 0
 end
 m_f = m_f_i;
 
-% % Import simulation data
-% [] = initialiseSim_01();
-
 % Generate FIS
 [fisArray] = genFis_01( n_UAV );
 
@@ -239,13 +249,13 @@ while finishFlag == false
   %% Path planning
   if ct_c*dt_c <= t
     ct_c = ct_c + 1;
-    [UAV_target] = fisModel(n_UAV, UAV_occ, UAV_loc, UAV_target, l_queue, ...
-                            n_x_search, n_y_search, l_c_s_x, l_c_s_y, ...
-                            m_scan, m_att, m_dw, m_prior, ...
-                            fisArray, ...
-                            t_travel_UAV, t_scan_UAV, ...
-                            ang_w, v_as_UAV, v_w, ...
-                            negAtt);
+    [UAV_target] = pathPlanner(n_UAV, UAV_target, l_queue, ...
+                    n_x_search, n_y_search, l_c_s_x, l_c_s_y, ...
+                    m_scan, m_t_scan, m_att, m_dw, m_prior, ...
+                    fisArray, ...
+                    t_travel_UAV, t_scan_UAV, ...
+                    ang_w, v_as_UAV, v_w, ...
+                    negAtt);
   end
 
   %% Agent actions
@@ -272,7 +282,7 @@ while finishFlag == false
   end
 
   %% Objective function evaluation
-  [s_obj, obj] = objEval(m_f, m_bo, r_bo, r_f, dt_s, s_obj);
+  [s_obj, obj] = objEval(m_f, m_bo, m_scan, r_bo, r_f, dt_s, s_obj, n_x_f, n_y_f, n_x_search, n_y_search, c_f_search);
 
   %% Advance timestep
   t = t + dt_s;
@@ -289,13 +299,9 @@ while finishFlag == false
 end
 
 %% Postprocessing
-% To do
-% - check file / directory management works as intended
-% - create all required colormaps
 
-% Generate and export plots (in progress)
 % Axes may not be entirely accurate as coarsening may remove some
-% rows/columns from original map.
+% rows/columns from original map. Fix this?
 
 % Axes for dynamic environment states
 ax_lat = linspace(m_p_ref.LatitudeLimits(1),  m_p_ref.LatitudeLimits(2),  n_x_f);
@@ -304,15 +310,6 @@ ax_lon = linspace(m_p_ref.LongitudeLimits(1), m_p_ref.LongitudeLimits(2), n_y_f)
 % Axes for search map
 ax_lat_scan = linspace(m_p_ref.LatitudeLimits(1),  m_p_ref.LatitudeLimits(2),  n_x_search);
 ax_lon_scan = linspace(m_p_ref.LongitudeLimits(1), m_p_ref.LongitudeLimits(2), n_y_search);
-
-% Colourmaps
-m_f_colourMap       = [ 1,   1,   1;    % 0
-                        0.5, 0.5, 0.5;  % 1
-                        1,   0.5, 0;    % 2
-                        1,   0,   0;    % 3
-                        0,   0,   0];   % 4
-m_s_colourMap       = [ 1, 1, 1;        % 0
-                        0, 0, 0];       % 1
 
 plot_exp_saveDir   = "test";
 data_exp_folder    = "figures";
@@ -329,13 +326,12 @@ plot_exp_fileName  = "testSim";
 %         'opt_res_hist',     opt_res_hist,     true;
 %         'fis',              fisArray,         true};
 plotData  = {
-        'm_bt_hist',        m_bt_hist,        true;
-        'm_dw_hist',        m_dw_hist,        true;    
-        'm_f_hist',         m_f_hist,         true;
+        'm_dw_hist',        m_dw_hist,        false;    
+        'm_f_hist',         m_f_hist,         false;    
+        'm_bo',             m_bo,             true;
         'fis',              fisArray,         true};
 genPlots( plotData, plot_exp_saveDir, data_exp_folder, ...
-          ax_lon, ax_lat, ax_lon_scan, ax_lat_scan, ...
-          m_f_colourMap);
+          ax_lon, ax_lat, ax_lon_scan, ax_lat_scan, dt_f);
 
 % Export data
 data_exp_saveDir  = "test";
@@ -351,7 +347,7 @@ data_exp_fileName = "testSim";
 %         'fis_param_hist',   fis_param_hist,   true;
 %         'sum_obj_hist',     sum_obj_hist,     true;
 %         'opt_res_hist',     opt_res_hist,     true};
-data = {  
+data = {
         'm_bt_hist',        m_bt_hist,        true;
         'm_dw_hist',        m_dw_hist,        true;    
         'm_f_hist',         m_f_hist,         true;
@@ -362,21 +358,9 @@ data = {
 exportData(data, data_exp_saveDir, data_exp_folder);
 
 %% Errata
+
 % Travel time calculation
-%                             % Calculate time to complete tasks and reach
-%                             % cell
-%                             % Groundspeed calculation using http://hyperphysics.phy-astr.gsu.edu/hbase/lcos.html#c3
-%                             % Other source: https://drstevenhale.gitlab.io/main/2008/11/triangleofvelocities/
-%                             % Notes
-%                             % - change notation for velocities and angles
-%                             % - if t normalised, then calculate att after
-%                             % all t calculated - no possible value for max
-%                             % t as well? unless considering absolute worst
-%                             % case scenario - travel to opposite side of
-%                             % map, scan then return back to opposite side.
-%                             theta       = ang_w - ang_g;
-%                             beta        = asin(v_w*sin(theta)/v_as);
-%                             v_gs        = sqrt(v_as.^2 + v_w.^2 - 2*v_as*v_w*cos(pi-theta-beta));
-%                             t           = UAV_travelTime(UAV) + UAV_scanTime(UAV) + dist/v_gs;
-%                             prior       = m_prior(i, j);
-%                             att         = evalfis(fis, [t, prior]);
+% Calculate time to complete tasks and reach
+% cell
+% Groundspeed calculation using http://hyperphysics.phy-astr.gsu.edu/hbase/lcos.html#c3
+% Other source: https://drstevenhale.gitlab.io/main/2008/11/triangleofvelocities/

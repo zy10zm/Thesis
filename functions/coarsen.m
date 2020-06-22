@@ -15,6 +15,7 @@
 
 %% Change log
 % 22/06/2020 - improved readability
+% 22/06/2020 - removed errata with idea of randomising building flammability
 
 %% Coarsen raster
 function [m_occ, m_r, l_c_x, l_c_y] = coarsen(m_p_in, ref, l_d)
@@ -59,38 +60,3 @@ function [m_occ, m_r, l_c_x, l_c_y] = coarsen(m_p_in, ref, l_d)
         end
     end
 end
-
-%% Errata
-% %% Import raster
-% rasterFile      = 'D:\Documents\University\MSc_Year_2\Thesis\Programming\02_fis\maps\\portAuPrince\buildings_rasterised.tif';
-% [building,R] = geotiffread(rasterFile);
-
-% %% Plot raster
-% figure
-% imshow(buildingRaster)
-% axis image off
-
-%% Process raster to randomise building flammability
-% % Process raster
-% building = 10*building; % Set value above 1
-% 
-% for i = 1:size(building,1)
-%     for j = 1:size(building,2)
-%         if building(i,j) == 10
-%             % Select building flammability
-%             
-%             % 
-%             
-%         end
-%     end
-% end
-
-% Not recognised - [A,R] = readgeoraster(rasterFile) - removed?
-% mapshow(building,R);
-% geoshow(building,R);
-% t               = Tiff(rasterFile, 'r');
-% buildingRaster  = read(t);
-
-%     % Calculate raster cell size
-%     degLat2Met = 111.32e3;  % Metres
-%     l_r = degLat2Met*ref.CellExtentInLatitude;
